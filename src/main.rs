@@ -1,10 +1,10 @@
 #![feature(stdarch_neon_dotprod)]
 
 use core::arch::aarch64::{
-    uint8x8_t, uint8x16_t, uint16x8_t, vaddlvq_u16, vaddlvq_u32, vaddq_u16, vaddvq_u32, vandq_u8,
-    vandq_u16, vbicq_u16, vcntq_u8, vcombine_u8, vdotq_u32, vdup_n_u8, vdupq_n_u8, vdupq_n_u16,
-    vdupq_n_u32, veorq_u16, vextq_u16, vgetq_lane_u16, vmaxvq_u16, vmovn_u16, vorrq_u16,
-    vpaddlq_u8, vreinterpretq_u8_u16, vshlq_n_u16, vshrq_n_u16, vtst_u8,
+    uint8x16_t, uint16x8_t, vaddlvq_u16, vaddq_u16, vaddvq_u32, vandq_u16, vbicq_u16, vcntq_u8,
+    vcombine_u8, vdotq_u32, vdupq_n_u8, vdupq_n_u16, vdupq_n_u32, veorq_u16, vextq_u16, vmaxvq_u16,
+    vmovn_u16, vorrq_u16, vpaddlq_u8, vrbitq_u8, vreinterpretq_u8_u16, vreinterpretq_u16_u8,
+    vrev16q_u8, vrev64q_u16, vshlq_n_u16, vshrq_n_u16,
 };
 
 #[repr(C)]
@@ -177,49 +177,50 @@ impl Mask {
         }
     }
 
-    fn score2(self, scores: &[[u8; 16]; 16]) -> u32 {
-        let mut total = 0;
-        for i in 0..16 {
-            for j in 0..16 {
-                total += u32::from(self.get(i, j)) * (scores[i][j] as u32);
-            }
-        }
-        total
-    }
-
-    fn score3(self, scores: &[uint8x16_t; 16]) -> u32 {
-        unsafe {
-            let array = core::mem::transmute::<_, [u16; 16]>(self);
-            let bits = core::mem::transmute::<[u8; 8], uint8x8_t>([1, 2, 4, 8, 16, 32, 64, 128]);
-            let one = vdupq_n_u8(1);
-
-            let mut total = vdupq_n_u32(0);
-
-            for i in 0..16 {
-                let m = array[i];
-                let mlo = vdup_n_u8((m & 0x00FF) as u8);
-                let mhi = vdup_n_u8((m >> 8) as u8);
-                let sel_lo = vtst_u8(bits, mlo);
-                let sel_hi = vtst_u8(bits, mhi);
-                let sel = vcombine_u8(sel_lo, sel_hi);
-                let mask01 = vandq_u8(sel, one);
-                total = vdotq_u32(total, scores[i], mask01);
-            }
-
-            vaddvq_u32(total)
-        }
-    }
-
     fn get(self, row: usize, col: usize) -> bool {
         debug_assert!(row < 16, "row out of bounds");
         debug_assert!(col < 16, "col out of bounds");
 
-        let array = unsafe { core::mem::transmute::<_, [u16; 16]>(self) };
+        let array: [u16; 16] = self.into();
         (array[row] >> col) & 1 == 1
     }
 
+    fn flip_horizontal(self) -> Self {
+        fn fliph(v: uint16x8_t) -> uint16x8_t {
+            unsafe {
+                let v_u8 = vreinterpretq_u8_u16(v);
+                let v_rev_u8 = vrbitq_u8(v_u8);
+                let v_rev_u16 = vrev16q_u8(v_rev_u8);
+                vreinterpretq_u16_u8(v_rev_u16)
+            }
+        }
+
+        Self {
+            low: fliph(self.low),
+            high: fliph(self.high),
+        }
+    }
+
+    fn flip_vertical(self) -> Self {
+        fn flipv(v: uint16x8_t) -> uint16x8_t {
+            unsafe {
+                let rev = vrev64q_u16(v);
+                vextq_u16(rev, rev, 4)
+            }
+        }
+
+        Self {
+            low: flipv(self.high),
+            high: flipv(self.low),
+        }
+    }
+
+    fn flip(self) -> Self {
+        self.flip_horizontal().flip_vertical()
+    }
+
     fn print(self) {
-        let array = unsafe { core::mem::transmute::<_, [u16; 16]>(self) };
+        let array: [u16; 16] = self.into();
         println!("+----------------+");
         for row in array {
             print!("|");
@@ -233,6 +234,18 @@ impl Mask {
             println!("|");
         }
         println!("+----------------+");
+    }
+}
+
+impl From<[u16; 16]> for Mask {
+    fn from(a: [u16; 16]) -> Self {
+        unsafe { core::mem::transmute(a) }
+    }
+}
+
+impl From<Mask> for [u16; 16] {
+    fn from(m: Mask) -> Self {
+        unsafe { core::mem::transmute(m) }
     }
 }
 
@@ -277,9 +290,7 @@ fn main() {
                 buf[8] = buf[8].wrapping_add(13);
                 buf[15] = buf[15].wrapping_add(23);
 
-                let mask = unsafe { core::mem::transmute::<_, Mask>(buf) };
-
-                // assert_eq!(mask.score(&scores), mask.score3(&scores_u8));
+                let mask = Mask::from(buf);
 
                 core::hint::black_box(mask.$f(&$s));
             }
@@ -295,10 +306,10 @@ fn main() {
         };
     }
 
-    benchmark!(score, scores);
-    benchmark!(score3, scores_u8);
-    benchmark!(score3, scores_u8);
-    benchmark!(score, scores);
-    benchmark!(score3, scores_u8);
-    benchmark!(score, scores);
+    // benchmark!(score, scores);
+    // benchmark!(score3, scores_u8);
+    // benchmark!(score3, scores_u8);
+    // benchmark!(score, scores);
+    // benchmark!(score3, scores_u8);
+    // benchmark!(score, scores);
 }
