@@ -1,6 +1,10 @@
+#![feature(stdarch_neon_dotprod)]
+
 use core::arch::aarch64::{
-    uint16x8_t, vaddlvq_u16, vaddq_u16, vbicq_u16, vcntq_u8, vdupq_n_u16, vextq_u16, vmaxvq_u16,
-    vorrq_u16, vpaddlq_u8, vreinterpretq_u8_u16, vshlq_n_u16, vshrq_n_u16,
+    uint8x8_t, uint8x16_t, uint16x8_t, vaddlvq_u16, vaddlvq_u32, vaddq_u16, vaddvq_u32, vandq_u8,
+    vandq_u16, vbicq_u16, vcntq_u8, vcombine_u8, vdotq_u32, vdup_n_u8, vdupq_n_u8, vdupq_n_u16,
+    vdupq_n_u32, veorq_u16, vextq_u16, vgetq_lane_u16, vmaxvq_u16, vmovn_u16, vorrq_u16,
+    vpaddlq_u8, vreinterpretq_u8_u16, vshlq_n_u16, vshrq_n_u16, vtst_u8,
 };
 
 #[repr(C)]
@@ -11,6 +15,14 @@ struct Mask {
 }
 
 impl Mask {
+    fn ne(self, rhs: Self) -> bool {
+        self.xor(rhs).any()
+    }
+
+    fn eq(self, rhs: Self) -> bool {
+        !self.ne(rhs)
+    }
+
     fn and(self, rhs: Self) -> Self {
         unsafe {
             Self {
@@ -19,7 +31,7 @@ impl Mask {
             }
         }
     }
-    
+
     fn and_not(self, rhs: Self) -> Self {
         unsafe {
             Self {
@@ -28,7 +40,7 @@ impl Mask {
             }
         }
     }
-    
+
     fn or(self, rhs: Self) -> Self {
         unsafe {
             Self {
@@ -37,8 +49,21 @@ impl Mask {
             }
         }
     }
-    
-    fn left(self) -> Self {
+
+    fn xor(self, rhs: Self) -> Self {
+        unsafe {
+            Self {
+                low: veorq_u16(self.low, rhs.low),
+                high: veorq_u16(self.high, rhs.high),
+            }
+        }
+    }
+
+    fn not(self) -> Self {
+        todo!()
+    }
+
+    fn shift_left(self) -> Self {
         unsafe {
             Self {
                 low: vshlq_n_u16(self.low, 1),
@@ -47,7 +72,7 @@ impl Mask {
         }
     }
 
-    fn right(self) -> Self {
+    fn shift_right(self) -> Self {
         unsafe {
             Self {
                 low: vshrq_n_u16(self.low, 1),
@@ -56,7 +81,7 @@ impl Mask {
         }
     }
 
-    fn up(self) -> Self {
+    fn shift_up(self) -> Self {
         unsafe {
             Self {
                 low: vextq_u16(vdupq_n_u16(0), self.low, 7),
@@ -65,7 +90,7 @@ impl Mask {
         }
     }
 
-    fn down(self) -> Self {
+    fn shift_down(self) -> Self {
         unsafe {
             Self {
                 low: vextq_u16(self.low, self.high, 1),
@@ -75,32 +100,25 @@ impl Mask {
     }
 
     fn neighbors(self) -> Self {
-        unsafe {
-            let left_low = vshlq_n_u16(self.low, 1);
-            let left_high = vshlq_n_u16(self.high, 1);
-            let right_low = vshrq_n_u16(self.low, 1);
-            let right_high = vshrq_n_u16(self.high, 1);
+        self.shift_left()
+            .or(self.shift_right())
+            .or(self.shift_up())
+            .or(self.shift_down())
+            .and_not(self)
+    }
 
-            let zero = vdupq_n_u16(0);
-            let up_low = vextq_u16(zero, self.low, 7);
-            let up_high = vextq_u16(self.low, self.high, 7);
-            let down_low = vextq_u16(self.low, self.high, 1);
-            let down_high = vextq_u16(self.high, zero, 1);
-
-            let horizontal_low = vorrq_u16(left_low, right_low);
-            let horizontal_high = vorrq_u16(left_high, right_high);
-
-            let vertical_low = vorrq_u16(up_low, down_low);
-            let vertical_high = vorrq_u16(up_high, down_high);
-
-            let result_low = vorrq_u16(horizontal_low, vertical_low);
-            let result_high = vorrq_u16(horizontal_high, vertical_high);
-
-            Mask {
-                low: vbicq_u16(result_low, self.low),
-                high: vbicq_u16(result_high, self.high),
-            }
-        }
+    fn neighbors2(self) -> Self {
+        let neighbors = self
+            .shift_left()
+            .or(self.shift_right())
+            .or(self.shift_up())
+            .or(self.shift_down());
+        neighbors
+            .or(neighbors.shift_left())
+            .or(neighbors.shift_right())
+            .or(neighbors.shift_up())
+            .or(neighbors.shift_down())
+            .and_not(self)
     }
 
     fn count(self) -> u32 {
@@ -115,6 +133,89 @@ impl Mask {
 
     fn any(self) -> bool {
         unsafe { vmaxvq_u16(vorrq_u16(self.low, self.high)) != 0 }
+    }
+
+    fn score(self, scores: &Scores) -> u32 {
+        unsafe {
+            let one = vdupq_n_u16(1);
+            let mut total = vdupq_n_u32(0);
+
+            macro_rules! iteration {
+                (0) => {
+                    let low_bits = vandq_u16(self.low, one);
+                    let high_bits = vandq_u16(self.high, one);
+                    let bits = vcombine_u8(vmovn_u16(low_bits), vmovn_u16(high_bits));
+                    total = vdotq_u32(total, bits, scores.0[0]);
+                };
+
+                ($i:expr) => {
+                    let low_bits = vandq_u16(vshrq_n_u16(self.low, $i), one);
+                    let high_bits = vandq_u16(vshrq_n_u16(self.high, $i), one);
+                    let bits = vcombine_u8(vmovn_u16(low_bits), vmovn_u16(high_bits));
+                    total = vdotq_u32(total, bits, scores.0[$i as usize]);
+                };
+            }
+
+            iteration!(0);
+            iteration!(1);
+            iteration!(2);
+            iteration!(3);
+            iteration!(4);
+            iteration!(5);
+            iteration!(6);
+            iteration!(7);
+            iteration!(8);
+            iteration!(9);
+            iteration!(10);
+            iteration!(11);
+            iteration!(12);
+            iteration!(13);
+            iteration!(14);
+            iteration!(15);
+
+            vaddvq_u32(total) as u32
+        }
+    }
+
+    fn score2(self, scores: &[[u8; 16]; 16]) -> u32 {
+        let mut total = 0;
+        for i in 0..16 {
+            for j in 0..16 {
+                total += u32::from(self.get(i, j)) * (scores[i][j] as u32);
+            }
+        }
+        total
+    }
+
+    fn score3(self, scores: &[uint8x16_t; 16]) -> u32 {
+        unsafe {
+            let array = core::mem::transmute::<_, [u16; 16]>(self);
+            let bits = core::mem::transmute::<[u8; 8], uint8x8_t>([1, 2, 4, 8, 16, 32, 64, 128]);
+            let one = vdupq_n_u8(1);
+
+            let mut total = vdupq_n_u32(0);
+
+            for i in 0..16 {
+                let m = array[i];
+                let mlo = vdup_n_u8((m & 0x00FF) as u8);
+                let mhi = vdup_n_u8((m >> 8) as u8);
+                let sel_lo = vtst_u8(bits, mlo);
+                let sel_hi = vtst_u8(bits, mhi);
+                let sel = vcombine_u8(sel_lo, sel_hi);
+                let mask01 = vandq_u8(sel, one);
+                total = vdotq_u32(total, scores[i], mask01);
+            }
+
+            vaddvq_u32(total)
+        }
+    }
+
+    fn get(self, row: usize, col: usize) -> bool {
+        debug_assert!(row < 16, "row out of bounds");
+        debug_assert!(col < 16, "col out of bounds");
+
+        let array = unsafe { core::mem::transmute::<_, [u16; 16]>(self) };
+        (array[row] >> col) & 1 == 1
     }
 
     fn print(self) {
@@ -135,11 +236,69 @@ impl Mask {
     }
 }
 
+#[derive(Clone, Copy)]
+#[repr(transparent)]
+struct Scores([uint8x16_t; 16]);
+
+impl Scores {
+    fn new(scores: &[[u8; 16]; 16]) -> Self {
+        let zero = unsafe { vdupq_n_u8(0) };
+        let mut out = [zero; 16];
+        for i in 0..16 {
+            let mut col = [0; 16];
+            for j in 0..16 {
+                col[j] = scores[j][i];
+            }
+            out[i] = unsafe { core::mem::transmute(col) };
+        }
+        Self(out)
+    }
+}
+
 fn main() {
+    const N: u64 = 1 << 24;
+
     let mut buf = [0u16; 16];
     rand::fill(&mut buf);
-    let mask = unsafe { core::mem::transmute::<_, Mask>(buf) };
-    mask.print();
-    mask.left().print();
-    mask.right().print();
+
+    let mut scores_u8 = [[0u8; 16]; 16];
+    for row in &mut scores_u8 {
+        rand::fill(row);
+    }
+    let scores = Scores::new(&scores_u8);
+    let scores_u8: [uint8x16_t; 16] = unsafe { core::mem::transmute(scores_u8) };
+
+    macro_rules! do_work {
+        ($f:ident, $s:ident) => {
+            for _ in 0..N {
+                buf[0] = buf[0].wrapping_add(1);
+                buf[6] = buf[6].wrapping_add(7);
+                buf[7] = buf[7].wrapping_add(11);
+                buf[8] = buf[8].wrapping_add(13);
+                buf[15] = buf[15].wrapping_add(23);
+
+                let mask = unsafe { core::mem::transmute::<_, Mask>(buf) };
+
+                // assert_eq!(mask.score(&scores), mask.score3(&scores_u8));
+
+                core::hint::black_box(mask.$f(&$s));
+            }
+        };
+    }
+
+    macro_rules! benchmark {
+        ($f:ident, $s:ident) => {
+            do_work!($f, $s);
+            let start = std::time::Instant::now();
+            do_work!($f, $s);
+            println!("{}: {:?}", stringify!($f), start.elapsed());
+        };
+    }
+
+    benchmark!(score, scores);
+    benchmark!(score3, scores_u8);
+    benchmark!(score3, scores_u8);
+    benchmark!(score, scores);
+    benchmark!(score3, scores_u8);
+    benchmark!(score, scores);
 }
