@@ -1,9 +1,10 @@
 #![feature(stdarch_neon_dotprod)]
+#![warn(clippy::pedantic)]
 
 use core::arch::aarch64::{
     uint8x16_t, uint16x8_t, vaddlvq_u16, vaddq_u16, vaddvq_u32, vandq_u16, vbicq_u16, vcntq_u8,
-    vcombine_u8, vdotq_u32, vdupq_n_u8, vdupq_n_u16, vdupq_n_u32, veorq_u16, vextq_u16, vmaxvq_u16,
-    vmovn_u16, vorrq_u16, vpaddlq_u8, vrbitq_u8, vreinterpretq_u8_u16, vreinterpretq_u16_u8,
+    vcombine_u8, vdotq_u32, vdupq_n_u16, vdupq_n_u32, veorq_u16, vextq_u16, vmaxvq_u16, vmovn_u16,
+    vmvnq_u16, vorrq_u16, vpaddlq_u8, vrbitq_u8, vreinterpretq_u8_u16, vreinterpretq_u16_u8,
     vrev16q_u8, vrev64q_u16, vshlq_n_u16, vshrq_n_u16,
 };
 
@@ -60,7 +61,12 @@ impl Mask {
     }
 
     fn not(self) -> Self {
-        todo!()
+        unsafe {
+            Self {
+                low: vmvnq_u16(self.low),
+                high: vmvnq_u16(self.high),
+            }
+        }
     }
 
     fn shift_left(self) -> Self {
@@ -253,63 +259,23 @@ impl From<Mask> for [u16; 16] {
 #[repr(transparent)]
 struct Scores([uint8x16_t; 16]);
 
-impl Scores {
-    fn new(scores: &[[u8; 16]; 16]) -> Self {
-        let zero = unsafe { vdupq_n_u8(0) };
-        let mut out = [zero; 16];
+impl From<[[u8; 16]; 16]> for Scores {
+    fn from(array: [[u8; 16]; 16]) -> Self {
+        let mut out = [[0u8; 16]; 16];
         for i in 0..16 {
-            let mut col = [0; 16];
             for j in 0..16 {
-                col[j] = scores[j][i];
+                out[j][i] = array[j][i];
             }
-            out[i] = unsafe { core::mem::transmute(col) };
         }
-        Self(out)
+        unsafe { Self(core::mem::transmute(out)) }
     }
 }
 
 fn main() {
-    const N: u64 = 1 << 24;
-
     let mut buf = [0u16; 16];
     rand::fill(&mut buf);
 
-    let mut scores_u8 = [[0u8; 16]; 16];
-    for row in &mut scores_u8 {
-        rand::fill(row);
-    }
-    let scores = Scores::new(&scores_u8);
-    let scores_u8: [uint8x16_t; 16] = unsafe { core::mem::transmute(scores_u8) };
+    let mask = Mask::from(buf);
 
-    macro_rules! do_work {
-        ($f:ident, $s:ident) => {
-            for _ in 0..N {
-                buf[0] = buf[0].wrapping_add(1);
-                buf[6] = buf[6].wrapping_add(7);
-                buf[7] = buf[7].wrapping_add(11);
-                buf[8] = buf[8].wrapping_add(13);
-                buf[15] = buf[15].wrapping_add(23);
-
-                let mask = Mask::from(buf);
-
-                core::hint::black_box(mask.$f(&$s));
-            }
-        };
-    }
-
-    macro_rules! benchmark {
-        ($f:ident, $s:ident) => {
-            do_work!($f, $s);
-            let start = std::time::Instant::now();
-            do_work!($f, $s);
-            println!("{}: {:?}", stringify!($f), start.elapsed());
-        };
-    }
-
-    // benchmark!(score, scores);
-    // benchmark!(score3, scores_u8);
-    // benchmark!(score3, scores_u8);
-    // benchmark!(score, scores);
-    // benchmark!(score3, scores_u8);
-    // benchmark!(score, scores);
+    mask.print();
 }
