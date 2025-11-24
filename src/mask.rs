@@ -1,8 +1,8 @@
 use core::arch::aarch64::{
     uint8x16_t, uint16x8_t, vaddlvq_u16, vaddq_u16, vaddvq_u32, vandq_u16, vbicq_u16, vcntq_u8,
-    vcombine_u8, vdotq_u32, vdupq_n_u16, vdupq_n_u32, veorq_u16, vextq_u16, vmaxvq_u16, vmovn_u16,
-    vmvnq_u16, vorrq_u16, vpaddlq_u8, vrbitq_u8, vreinterpretq_u8_u16, vreinterpretq_u16_u8,
-    vrev16q_u8, vrev64q_u16, vshlq_n_u16, vshrq_n_u16,
+    vcombine_u8, vdotq_u32, vdupq_n_u16, vdupq_n_u32, veorq_u16, vextq_u16, vmaxvq_u16, vminvq_u16,
+    vmovn_u16, vmvnq_u16, vorrq_u16, vpaddlq_u8, vrbitq_u8, vreinterpretq_u8_u16,
+    vreinterpretq_u16_u8, vrev16q_u8, vrev64q_u16, vshlq_n_u16, vshrq_n_u16,
 };
 
 use rand::Rng;
@@ -154,7 +154,15 @@ impl Mask {
     }
 
     pub fn any(self) -> bool {
-        unsafe { vmaxvq_u16(vorrq_u16(self.low, self.high)) != 0 }
+        !self.is_empty()
+    }
+
+    pub fn is_empty(self) -> bool {
+        unsafe { vmaxvq_u16(vorrq_u16(self.low, self.high)) == 0 }
+    }
+
+    pub fn is_full(self) -> bool {
+        unsafe { vminvq_u16(vandq_u16(self.low, self.high)) == u16::MAX }
     }
 
     pub fn score(self, scores: &Scores) -> u32 {
@@ -263,6 +271,19 @@ impl Mask {
         let mut out = [0u64; 4];
         out[i] = get_kth_one(array[i], k);
         Self::from_u64(out)
+    }
+
+    pub fn expand(mut self, color: Self) -> Self {
+        debug_assert!(!self.and(color).any());
+
+        loop {
+            let captured = self.neighbors().and(color);
+            if captured.any() {
+                self = self.or(captured);
+            } else {
+                return self;
+            }
+        }
     }
 
     pub const fn into_u16(self) -> [u16; 16] {

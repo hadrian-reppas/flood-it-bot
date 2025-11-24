@@ -166,4 +166,28 @@ impl State {
 
         seen.eq(Mask::full())
     }
+
+    pub fn play(&mut self, color: u8, player1: bool) -> bool {
+        debug_assert!(self.is_valid());
+        debug_assert!(color < 8);
+        debug_assert!(player1 || self.player1_last_move.is_some());
+        debug_assert!(
+            !player1 || self.player1_last_move.is_none() || self.player2_last_move.is_some()
+        );
+        debug_assert!(Some(color) != self.player1_last_move);
+        debug_assert!(Some(color) != self.player2_last_move);
+
+        let (player_mask, last_move) = if player1 {
+            (&mut self.player1, &mut self.player1_last_move)
+        } else {
+            (&mut self.player2, &mut self.player2_last_move)
+        };
+        let color_mask = &mut self.colors[color as usize];
+
+        *player_mask = player_mask.expand(*color_mask);
+        *color_mask = color_mask.and_not(*player_mask);
+        *last_move = Some(color);
+
+        self.player1.or(self.player2).or(self.walls).is_full()
+    }
 }
