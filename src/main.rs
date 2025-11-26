@@ -5,27 +5,41 @@ mod bot;
 mod game;
 mod mask;
 
-fn main() {
-    let mut state = game::State::generate(2);
-    let mut player1 = true;
-    let mut game_over = false;
+use bot::*;
 
+fn play(seed: u64, player1: &mut impl Player, player2: &mut impl Player) -> i32 {
+    let mut state = game::State::generate(seed);
     state.print();
+    println!();
 
-    while !game_over {
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        let color = bot::greedy_move(&state, player1);
-        println!("\nPlayer{}: {}", 2 - i32::from(player1), color);
-        game_over = state.play(color, player1);
+    while !state.game_over() {
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        let color = if state.player1_next() {
+            player1.play(&state)
+        } else {
+            player2.play(&state)
+        };
+        state.play(color);
         state.print();
-        player1 = !player1;
+        println!();
     }
 
-    let player1_points = state.player1.count();
-    let player2_points = state.player2.count();
-    if player1_points > player2_points {
-        println!("\nPlayer1 wins {player1_points}-{player2_points}");
-    } else {
-        println!("\nPlayer2 wins {player2_points}-{player1_points}");
-    }
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    state.finalize();
+    state.print();
+    println!();
+    std::thread::sleep(std::time::Duration::from_secs(2));
+
+    state.final_margin()
+}
+
+fn main() {
+    let seed = std::env::args().nth(1).unwrap().parse().unwrap();
+
+    let mut player1 = Negamax::new(TerritoryDiff, 8);
+    let mut player2 = Negamax::new(TerritoryDiff, 0);
+
+    let margin1 = play(seed, &mut player1, &mut player2);
+    let margin2 = play(seed, &mut player2, &mut player1);
+    println!("{} ({margin1} vs {margin2})", margin1 - margin2);
 }

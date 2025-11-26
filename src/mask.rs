@@ -273,11 +273,9 @@ impl Mask {
         Self::from_u64(out)
     }
 
-    pub fn expand(mut self, color: Self) -> Self {
-        debug_assert!(!self.and(color).any());
-
+    pub fn bfs(mut self, accessible: Self) -> Self {
         loop {
-            let captured = self.neighbors().and(color);
+            let captured = self.neighbors().and(accessible);
             if captured.any() {
                 self = self.or(captured);
             } else {

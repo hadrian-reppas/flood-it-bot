@@ -33,6 +33,7 @@ const PROTECTED: [(usize, usize); 24] = [
     (15, 13),
     (15, 14),
 ];
+const ROUND_LIMIT: u32 = 100;
 
 fn generate(seed: u64) -> ([Mask; 8], Mask) {
     let mut rng = Pcg64::seed_from_u64(seed);
@@ -81,7 +82,7 @@ fn generate(seed: u64) -> ([Mask; 8], Mask) {
         add_color!(position);
     }
 
-    let wall_count = 31 + 2 * rng.random_range(0..=16);
+    let wall_count = rng.random_range(32..=64);
 
     let todo = 256 - used.count() - wall_count;
     for _ in 0..todo {
@@ -100,6 +101,8 @@ pub struct State {
     pub player2: Mask,
     pub player1_last_move: Option<u8>,
     pub player2_last_move: Option<u8>,
+    pub round: u32,
+    pub seed: u64,
 }
 
 impl State {
@@ -112,6 +115,8 @@ impl State {
             player2: Mask::one_hot(15, 15),
             player1_last_move: None,
             player2_last_move: None,
+            round: 0,
+            seed,
         }
     }
 
@@ -127,6 +132,9 @@ impl State {
                     };
                 }
 
+                test!(self.walls, Black);
+                test!(self.player1, White);
+                test!(self.player2, LightBlack);
                 test!(self.colors[0], Red);
                 test!(self.colors[1], LightRed);
                 test!(self.colors[2], Yellow);
@@ -135,9 +143,6 @@ impl State {
                 test!(self.colors[5], Blue);
                 test!(self.colors[6], Magenta);
                 test!(self.colors[7], LightMagenta);
-                test!(self.walls, Black);
-                test!(self.player1, White);
-                test!(self.player2, LightBlack);
 
                 panic!();
             }
@@ -146,48 +151,113 @@ impl State {
     }
 
     pub fn is_valid(&self) -> bool {
-        let mut seen = Mask::empty();
+        if (self.round >= 1) != self.player1_last_move.is_some()
+            || (self.round >= 2) != self.player2_last_move.is_some()
+        {
+            return false;
+        }
+
+        let mut seen = self.walls;
 
         macro_rules! check {
-            ($mask:expr) => {
+            ($mask:expr) => {{
+                #![allow(unused_assignments)]
                 if seen.and($mask).any() {
                     return false;
                 }
                 seen = seen.or($mask);
-            };
+            }};
         }
+
+        check!(self.player1);
+        check!(self.player2);
+
+        seen = Mask::one_hot(0, 0).or(Mask::one_hot(15, 15));
 
         for color in self.colors {
             check!(color);
         }
         check!(self.walls);
-        check!(self.player1);
-        check!(self.player2);
 
         seen.eq(Mask::full())
     }
 
-    pub fn play(&mut self, color: u8, player1: bool) -> bool {
+    pub fn play(&mut self, color: u8) {
         debug_assert!(self.is_valid());
+        debug_assert!(!self.game_over());
         debug_assert!(color < 8);
-        debug_assert!(player1 || self.player1_last_move.is_some());
-        debug_assert!(
-            !player1 || self.player1_last_move.is_none() || self.player2_last_move.is_some()
-        );
         debug_assert!(Some(color) != self.player1_last_move);
         debug_assert!(Some(color) != self.player2_last_move);
 
-        let (player_mask, last_move) = if player1 {
-            (&mut self.player1, &mut self.player1_last_move)
+        if self.player1_next() {
+            self.player1 = self
+                .player1
+                .bfs(self.colors[color as usize].and_not(self.player2));
+            self.player1_last_move = Some(color);
         } else {
-            (&mut self.player2, &mut self.player2_last_move)
-        };
-        let color_mask = &mut self.colors[color as usize];
+            self.player2 = self
+                .player2
+                .bfs(self.colors[color as usize].and_not(self.player1));
+            self.player2_last_move = Some(color);
+        }
 
-        *player_mask = player_mask.expand(*color_mask);
-        *color_mask = color_mask.and_not(*player_mask);
-        *last_move = Some(color);
-
-        self.player1.or(self.player2).or(self.walls).is_full()
+        self.round += 1;
     }
+
+    pub fn checkpoint(&self) -> Checkpoint {
+        Checkpoint {
+            players: self.player1.or(self.player2),
+            player1_last_move: self.player1_last_move,
+            player2_last_move: self.player2_last_move,
+            round: self.round,
+        }
+    }
+
+    pub fn restore(&mut self, checkpoint: Checkpoint) {
+        self.player1 = self.player1.and(checkpoint.players);
+        self.player2 = self.player2.and(checkpoint.players);
+        self.player1_last_move = checkpoint.player1_last_move;
+        self.player2_last_move = checkpoint.player2_last_move;
+        self.round = checkpoint.round;
+    }
+
+    pub fn player1_next(&self) -> bool {
+        self.round % 2 == 0
+    }
+
+    pub fn game_over(&self) -> bool {
+        if self.round == ROUND_LIMIT {
+            return true;
+        }
+
+        let accessible = self.player1.or(self.player2).or(self.walls).not();
+        let player1_accessible = self.player1.bfs(accessible);
+        let player2_accessible = self.player2.bfs(accessible);
+        player1_accessible.and(player2_accessible).is_empty()
+    }
+
+    pub fn final_margin(&self) -> i32 {
+        debug_assert!(self.game_over());
+
+        let accessible = self.player1.or(self.player2).or(self.walls).not();
+        let player1 = self.player1.bfs(accessible);
+        let player2 = self.player2.bfs(accessible);
+        player1.count() as i32 - player2.count() as i32
+    }
+
+    pub fn finalize(&mut self) {
+        debug_assert!(self.game_over());
+
+        let accessible = self.player1.or(self.player2).or(self.walls).not();
+        self.player1 = self.player1.bfs(accessible);
+        self.player2 = self.player2.bfs(accessible);
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Checkpoint {
+    pub players: Mask,
+    pub player1_last_move: Option<u8>,
+    pub player2_last_move: Option<u8>,
+    pub round: u32,
 }
