@@ -33,7 +33,11 @@ const PROTECTED: [(usize, usize); 24] = [
     (15, 13),
     (15, 14),
 ];
-const ROUND_LIMIT: u32 = 100;
+
+pub const ROUND_LIMIT: u32 = 100;
+pub const COLOR_NAMES: &[&str] = &[
+    "red", "orange", "yellow", "green", "cyan", "blue", "purple", "pink",
+];
 
 fn generate(seed: u64) -> ([Mask; 8], Mask) {
     let mut rng = Pcg64::seed_from_u64(seed);

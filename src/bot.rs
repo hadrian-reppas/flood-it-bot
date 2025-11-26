@@ -66,6 +66,7 @@ impl<E: Eval> Player for Negamax<E> {
 
         let mut max_value = i32::MIN;
         let mut best_move = u8::MAX;
+
         for color in 0..8 {
             if Some(color) == state.player1_last_move || Some(color) == state.player2_last_move {
                 continue;
@@ -95,5 +96,19 @@ impl Eval for TerritoryDiff {
         let player1_accessible = state.player1.bfs(accessible);
         let player2_accessible = state.player2.bfs(accessible);
         player1_accessible.count() as i32 - player2_accessible.count() as i32
+    }
+}
+
+#[derive(Default, Clone, Copy, Debug)]
+pub struct TerritoryDiff2;
+
+impl Eval for TerritoryDiff2 {
+    fn eval(&self, state: &State) -> i32 {
+        let accessible = state.player1.or(state.player2).or(state.walls).not();
+        let player1_accessible = state.player1.bfs(accessible);
+        let player2_accessible = state.player2.bfs(accessible);
+        1000 * (player1_accessible.count() as i32 - player2_accessible.count() as i32)
+            + state.player1.count() as i32
+            + state.player2.count() as i32
     }
 }
