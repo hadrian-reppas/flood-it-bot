@@ -2,6 +2,7 @@
 #![warn(clippy::pedantic)]
 
 use std::sync::{Mutex, mpsc};
+use std::time::{Duration, Instant};
 
 use rand::prelude::*;
 
@@ -30,47 +31,133 @@ macro_rules! contestant {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct Outcome {
+struct ContestantStats {
+    elo: f32,
+    matches: u32,
+    time: Duration,
+    rounds: u32,
+}
+
+impl ContestantStats {
+    fn new() -> Self {
+        Self {
+            elo: 400.0,
+            matches: 0,
+            time: Duration::ZERO,
+            rounds: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct MatchResult {
     p1: usize,
     p2: usize,
     margin: i32,
+    p1_time: Duration,
+    p2_time: Duration,
+    rounds: u32,
+}
+
+impl MatchResult {
+    fn update(&self, stats: &mut [ContestantStats]) {
+        const K: f32 = 16.0;
+
+        let ra = stats[self.p1].elo;
+        let rb = stats[self.p2].elo;
+
+        let ea = 1.0 / (1.0 + 10f32.powf((rb - ra) / 400.0));
+        let eb = 1.0 - ea;
+
+        let sa = if self.margin > 0 {
+            1.0
+        } else if self.margin < 0 {
+            0.0
+        } else {
+            0.5
+        };
+        let sb = 1.0 - sa;
+
+        stats[self.p1].elo = ra + K * (sa - ea);
+        stats[self.p2].elo = rb + K * (sb - eb);
+
+        stats[self.p1].matches += 1;
+        stats[self.p2].matches += 1;
+
+        stats[self.p1].time += self.p1_time;
+        stats[self.p2].time += self.p2_time;
+
+        stats[self.p1].rounds += self.rounds;
+        stats[self.p2].rounds += self.rounds;
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct GameResult {
+    margin: i32,
+    p1_time: Duration,
+    p2_time: Duration,
+    rounds: u32,
 }
 
 const CONTESTANTS: &[Contestant] = &[
+    contestant!(Negamax(CloserCaptured, 0)),
+    contestant!(Negamax(CloserCaptured, 1)),
     contestant!(Negamax(CloserCaptured, 2)),
+    contestant!(Negamax(CloserCaptured, 3)),
     contestant!(Negamax(CloserCaptured, 4)),
+    contestant!(Negamax(CloserCaptured, 5)),
     contestant!(Negamax(CloserCaptured, 6)),
+    contestant!(Negamax(CloserCaptured, 7)),
+    contestant!(Negamax(CloserCaptured, 8)),
     contestant!(Negamax(Accessible, 8)),
     contestant!(Negamax(AccessibleCaptured, 8)),
-    contestant!(Negamax(CloserCaptured, 8)),
     contestant!(Negamax(AccessibleCloser, 8)),
 ];
 
-fn play(seed: u64, player1: &mut dyn Player, player2: &mut dyn Player) -> i32 {
+fn play_game(seed: u64, player1: &mut dyn Player, player2: &mut dyn Player) -> GameResult {
     let mut state = game::State::generate(seed);
+    let mut p1_time = Duration::ZERO;
+    let mut p2_time = Duration::ZERO;
 
     while !state.game_over() {
-        let color = if state.player1_next() {
-            player1.play(&state)
+        let start = Instant::now();
+        let color;
+        if state.player1_next() {
+            color = player1.play(&state);
+            p1_time += start.elapsed();
         } else {
-            player2.play(&state)
+            color = player2.play(&state);
+            p2_time += start.elapsed();
         };
         state.play(color);
     }
 
-    state.final_margin()
+    GameResult {
+        margin: state.final_margin(),
+        p1_time,
+        p2_time,
+        rounds: state.round,
+    }
 }
 
-fn compare(seed: u64, c1: &Contestant, c2: &Contestant) -> i32 {
-    let mut player1 = (c1.make)();
-    let mut player2 = (c2.make)();
-    let margin1 = play(seed, player1.as_mut(), player2.as_mut());
+fn play_match(seed: u64, p1: usize, p2: usize) -> MatchResult {
+    let mut player1 = (CONTESTANTS[p1].make)();
+    let mut player2 = (CONTESTANTS[p2].make)();
+    let game1 = play_game(seed, player1.as_mut(), player2.as_mut());
 
-    player1 = (c1.make)();
-    player2 = (c2.make)();
-    let margin2 = play(seed, player2.as_mut(), player1.as_mut());
+    player1 = (CONTESTANTS[p1].make)();
+    player2 = (CONTESTANTS[p2].make)();
+    let game2 = play_game(seed, player2.as_mut(), player1.as_mut());
 
-    margin1 - margin2
+    MatchResult {
+        p1,
+        p2,
+        margin: game1.margin - game2.margin,
+        p1_time: game1.p1_time + game2.p1_time,
+        p2_time: game1.p2_time + game2.p2_time,
+        rounds: game1.rounds + game2.rounds,
+    }
 }
 
 fn get_job() -> (usize, usize) {
@@ -79,8 +166,10 @@ fn get_job() -> (usize, usize) {
     let mut queue = QUEUE.lock().unwrap();
     if queue.is_empty() {
         for i in 0..CONTESTANTS.len() {
-            for j in 0..i {
-                queue.push((i, j));
+            for j in 0..CONTESTANTS.len() {
+                if i != j {
+                    queue.push((i, j));
+                }
             }
         }
         queue.shuffle(&mut rand::rng());
@@ -88,68 +177,63 @@ fn get_job() -> (usize, usize) {
     queue.pop().unwrap()
 }
 
-fn runner(tx: mpsc::Sender<Outcome>) {
+fn runner(tx: mpsc::Sender<MatchResult>) {
     loop {
         let (p1, p2) = get_job();
-        let margin = compare(rand::random(), &CONTESTANTS[p1], &CONTESTANTS[p2]);
-        tx.send(Outcome { p1, p2, margin }).unwrap();
+        let seed = rand::random();
+
+        let mut player1 = (CONTESTANTS[p1].make)();
+        let mut player2 = (CONTESTANTS[p2].make)();
+        let game1 = play_game(seed, player1.as_mut(), player2.as_mut());
+
+        player1 = (CONTESTANTS[p1].make)();
+        player2 = (CONTESTANTS[p2].make)();
+        let game2 = play_game(seed, player2.as_mut(), player1.as_mut());
+
+        tx.send(MatchResult {
+            p1,
+            p2,
+            margin: game1.margin - game2.margin,
+            p1_time: game1.p1_time + game2.p1_time,
+            p2_time: game1.p2_time + game2.p2_time,
+            rounds: game1.rounds + game2.rounds,
+        })
+        .unwrap();
     }
 }
 
-fn scorekeeper(rx: mpsc::Receiver<Outcome>) {
-    const K: f64 = 16.0;
+fn scorekeeper(rx: mpsc::Receiver<MatchResult>) {
+    let mut stats = [ContestantStats::new(); CONTESTANTS.len()];
 
-    let mut scores = [400.0; CONTESTANTS.len()];
-    let mut matches = [0; CONTESTANTS.len()];
+    while let Ok(result) = rx.recv() {
+        result.update(&mut stats);
 
-    while let Ok(Outcome { p1, p2, margin }) = rx.recv() {
-        let ra = scores[p1];
-        let rb = scores[p2];
+        print!("{}{}", termion::clear::All, termion::cursor::Goto(1, 1));
+        println!(
+            "+------------------------------------------+--------+---------+----------------+"
+        );
+        println!(
+            "| Name                                     | Elo    | Matches | Time           |"
+        );
+        println!(
+            "+------------------------------------------+--------+---------+----------------+"
+        );
+        for (contestant, stats) in CONTESTANTS.iter().zip(&stats) {
+            let avg_time = format!("{:?}", stats.time / stats.rounds.max(1));
 
-        let ea = 1.0 / (1.0 + 10f64.powf((rb - ra) / 400.0));
-        let eb = 1.0 - ea;
-
-        let sa = if margin > 0 {
-            1.0
-        } else if margin < 0 {
-            0.0
-        } else {
-            0.5
-        };
-        let sb = 1.0 - sa;
-
-        scores[p1] = ra + K * (sa - ea);
-        scores[p2] = rb + K * (sb - eb);
-
-        matches[p1] += 1;
-        matches[p2] += 1;
-
-        println!("+------------------------------------------+--------+---------+");
-        println!("| Name                                     | Elo    | Matches |");
-        println!("+------------------------------------------+--------+---------+");
-        for ((contestant, score), matches) in CONTESTANTS.iter().zip(scores).zip(matches) {
             println!(
-                "| {:>40} | {:>6.1} | {:>7} |",
-                contestant.name, score, matches
+                "| {:>40} | {:>6.1} | {:>7} | {:>14} |",
+                contestant.name, stats.elo, stats.matches, avg_time
             );
         }
-        println!("+------------------------------------------+--------+---------+");
+        println!(
+            "+------------------------------------------+--------+---------+----------------+"
+        );
     }
 }
 
 fn main() {
-    /*
-    let mut state = game::State::generate(1351235);
-    let (a, b, c) = state.player1.closer(state.player2, state.walls.not());
-    state.colors[0] = a;
-    state.colors[1] = b;
-    state.colors[2] = c;
-    state.colors[3] = mask::Mask::full();
-
-    state.print();
-
-    return;
-    */
+    print!("{}{}", termion::clear::All, termion::cursor::Goto(1, 1));
 
     let (tx, rx) = mpsc::channel();
     for _ in 0..8 {
