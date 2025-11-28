@@ -13,7 +13,7 @@ pub fn negamax<E: Eval>(
     sign: i32,
 ) -> i32 {
     if state.game_over() {
-        return sign * state.final_margin();
+        return sign * (INFINITY + state.final_margin() + depth as i32);
     } else if depth == 0 {
         return sign * eval.eval(state);
     }
@@ -42,21 +42,31 @@ pub trait Player {
     fn play(&mut self, state: &State) -> u8;
 }
 
+pub struct Greedy;
+
+impl Player for Greedy {
+    fn play(&mut self, state: &State) -> u8 {
+        (0..8)
+            .filter(|c| Some(*c) != state.player1_last_move && Some(*c) != state.player2_last_move)
+            .max_by_key(|c| {
+                let mut state = *state;
+                state.play(*c);
+                if state.player1_next() {
+                    state.player2.count()
+                } else {
+                    state.player1.count()
+                }
+            })
+            .unwrap()
+    }
+}
+
 pub trait Eval {
     fn eval(&self, state: &State) -> i32;
 }
 
 #[derive(Default, Clone, Copy, Debug)]
-pub struct Negamax<E> {
-    eval: E,
-    depth: u32,
-}
-
-impl<E> Negamax<E> {
-    pub fn new(eval: E, depth: u32) -> Self {
-        Self { eval, depth }
-    }
-}
+pub struct Negamax<E>(pub E, pub u32);
 
 impl<E: Eval> Player for Negamax<E> {
     fn play(&mut self, state: &State) -> u8 {
@@ -73,9 +83,7 @@ impl<E: Eval> Player for Negamax<E> {
             }
 
             state.play(color);
-            let value = -negamax(
-                &mut state, &self.eval, self.depth, -INFINITY, INFINITY, -sign,
-            );
+            let value = -negamax(&mut state, &self.0, self.1, -INFINITY, INFINITY, -sign);
             state.restore(checkpoint);
 
             if value > max_value {
@@ -88,9 +96,9 @@ impl<E: Eval> Player for Negamax<E> {
 }
 
 #[derive(Default, Clone, Copy, Debug)]
-pub struct TerritoryDiff;
+pub struct Accessible;
 
-impl Eval for TerritoryDiff {
+impl Eval for Accessible {
     fn eval(&self, state: &State) -> i32 {
         let accessible = state.player1.or(state.player2).or(state.walls).not();
         let player1_accessible = state.player1.bfs(accessible);
@@ -100,15 +108,43 @@ impl Eval for TerritoryDiff {
 }
 
 #[derive(Default, Clone, Copy, Debug)]
-pub struct TerritoryDiff2;
+pub struct AccessibleCaptured;
 
-impl Eval for TerritoryDiff2 {
+impl Eval for AccessibleCaptured {
     fn eval(&self, state: &State) -> i32 {
         let accessible = state.player1.or(state.player2).or(state.walls).not();
         let player1_accessible = state.player1.bfs(accessible);
         let player2_accessible = state.player2.bfs(accessible);
         1000 * (player1_accessible.count() as i32 - player2_accessible.count() as i32)
             + state.player1.count() as i32
-            + state.player2.count() as i32
+            - state.player2.count() as i32
+    }
+}
+
+#[derive(Default, Clone, Copy, Debug)]
+pub struct CloserCaptured;
+
+impl Eval for CloserCaptured {
+    fn eval(&self, state: &State) -> i32 {
+        let accessible = state.player1.or(state.player2).or(state.walls).not();
+        let (player1_closer, _, player2_closer) = state.player1.closer(state.player2, accessible);
+        1000 * (player1_closer.count() as i32 - player2_closer.count() as i32)
+            + state.player1.count() as i32
+            - state.player2.count() as i32
+    }
+}
+
+#[derive(Default, Clone, Copy, Debug)]
+pub struct AccessibleCloser;
+
+impl Eval for AccessibleCloser {
+    fn eval(&self, state: &State) -> i32 {
+        let accessible = state.player1.or(state.player2).or(state.walls).not();
+        let player1_accessible = state.player1.bfs(accessible);
+        let player2_accessible = state.player2.bfs(accessible);
+        let (player1_closer, _, player2_closer) = state.player1.closer(state.player2, accessible);
+        1000 * (player1_accessible.count() as i32 - player2_accessible.count() as i32)
+            + player1_closer.count() as i32
+            - player2_closer.count() as i32
     }
 }

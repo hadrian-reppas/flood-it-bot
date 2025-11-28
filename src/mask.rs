@@ -284,6 +284,35 @@ impl Mask {
         }
     }
 
+    pub fn closer(mut self, mut other: Self, mut accessible: Self) -> (Self, Self, Self) {
+        let mut both = Mask::empty();
+        loop {
+            let self_neighbors = self
+                .neighbors()
+                .and(accessible)
+                .and_not(other)
+                .and_not(both);
+            let other_neighbors = other
+                .neighbors()
+                .and(accessible)
+                .and_not(self)
+                .and_not(both);
+
+            if self_neighbors.is_empty() && other_neighbors.is_empty() {
+                return (self, both, other);
+            }
+
+            let self_captured = self_neighbors.and_not(other_neighbors);
+            let other_captured = other_neighbors.and_not(self_neighbors);
+            let both_captured = self_captured.and(other_captured);
+
+            self = self.or(self_captured);
+            other = other.or(other_captured);
+            both = both.or(both_captured);
+            accessible = accessible.and_not(self_neighbors).and_not(other_neighbors);
+        }
+    }
+
     pub const fn into_u16(self) -> [u16; 16] {
         unsafe { core::mem::transmute(self) }
     }
