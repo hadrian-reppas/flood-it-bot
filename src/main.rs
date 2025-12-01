@@ -33,7 +33,10 @@ macro_rules! contestant {
 #[derive(Clone, Copy, Debug)]
 struct ContestantStats {
     elo: f32,
-    matches: u32,
+    margin: i32,
+    wins: u32,
+    losses: u32,
+    draws: u32,
     time: Duration,
     rounds: u32,
 }
@@ -42,7 +45,10 @@ impl ContestantStats {
     fn new() -> Self {
         Self {
             elo: 400.0,
-            matches: 0,
+            margin: 0,
+            wins: 0,
+            losses: 0,
+            draws: 0,
             time: Duration::ZERO,
             rounds: 0,
         }
@@ -81,14 +87,25 @@ impl MatchResult {
         stats[self.p1].elo = ra + K * (sa - ea);
         stats[self.p2].elo = rb + K * (sb - eb);
 
-        stats[self.p1].matches += 1;
-        stats[self.p2].matches += 1;
+        stats[self.p1].margin += self.margin;
+        stats[self.p2].margin -= self.margin;
 
         stats[self.p1].time += self.p1_time;
         stats[self.p2].time += self.p2_time;
 
         stats[self.p1].rounds += self.rounds;
         stats[self.p2].rounds += self.rounds;
+
+        if self.margin > 0 {
+            stats[self.p1].wins += 1;
+            stats[self.p2].losses += 1;
+        } else if self.margin < 0 {
+            stats[self.p1].losses += 1;
+            stats[self.p2].wins += 1;
+        } else {
+            stats[self.p1].draws += 1;
+            stats[self.p2].draws += 1;
+        }
     }
 }
 
@@ -101,18 +118,15 @@ struct GameResult {
 }
 
 const CONTESTANTS: &[Contestant] = &[
-    contestant!(Negamax(CloserCaptured, 0)),
-    contestant!(Negamax(CloserCaptured, 1)),
-    contestant!(Negamax(CloserCaptured, 2)),
-    contestant!(Negamax(CloserCaptured, 3)),
-    contestant!(Negamax(CloserCaptured, 4)),
-    contestant!(Negamax(CloserCaptured, 5)),
-    contestant!(Negamax(CloserCaptured, 6)),
-    contestant!(Negamax(CloserCaptured, 7)),
-    contestant!(Negamax(CloserCaptured, 8)),
+    contestant!(Greedy),
+    contestant!(Negamax(Captured, 8)),
     contestant!(Negamax(Accessible, 8)),
-    contestant!(Negamax(AccessibleCaptured, 8)),
-    contestant!(Negamax(AccessibleCloser, 8)),
+    contestant!(Negamax(Closer, 8)),
+    contestant!(Negamax((Closer, Captured), 8)),
+    contestant!(Negamax((Accessible, Captured), 8)),
+    contestant!(Negamax((Accessible, Closer), 8)),
+    contestant!(Negamax((Closer, Accessible), 8)),
+    contestant!(Negamax((Closer, Accessible, Captured), 8)),
 ];
 
 fn play_game(seed: u64, player1: &mut dyn Player, player2: &mut dyn Player) -> GameResult {
@@ -138,25 +152,6 @@ fn play_game(seed: u64, player1: &mut dyn Player, player2: &mut dyn Player) -> G
         p1_time,
         p2_time,
         rounds: state.round,
-    }
-}
-
-fn play_match(seed: u64, p1: usize, p2: usize) -> MatchResult {
-    let mut player1 = (CONTESTANTS[p1].make)();
-    let mut player2 = (CONTESTANTS[p2].make)();
-    let game1 = play_game(seed, player1.as_mut(), player2.as_mut());
-
-    player1 = (CONTESTANTS[p1].make)();
-    player2 = (CONTESTANTS[p2].make)();
-    let game2 = play_game(seed, player2.as_mut(), player1.as_mut());
-
-    MatchResult {
-        p1,
-        p2,
-        margin: game1.margin - game2.margin,
-        p1_time: game1.p1_time + game2.p1_time,
-        p2_time: game1.p2_time + game2.p2_time,
-        rounds: game1.rounds + game2.rounds,
     }
 }
 
@@ -208,32 +203,42 @@ fn scorekeeper(rx: mpsc::Receiver<MatchResult>) {
     while let Ok(result) = rx.recv() {
         result.update(&mut stats);
 
+        let mut tuples: Vec<_> = CONTESTANTS.iter().zip(&stats).collect();
+        tuples.sort_by_key(|(_, stats)| (-1000.0 * stats.elo) as i64);
+
         print!("{}{}", termion::clear::All, termion::cursor::Goto(1, 1));
         println!(
-            "+------------------------------------------+--------+---------+----------------+"
+            "+--------------------------------------------------+--------+--------+-----+------+------+----------------+"
         );
         println!(
-            "| Name                                     | Elo    | Matches | Time           |"
+            "| Name                                             | Elo    | Margin | Win | Loss | Draw | Time           |"
         );
         println!(
-            "+------------------------------------------+--------+---------+----------------+"
+            "+--------------------------------------------------+--------+--------+-----+------+------+----------------+"
         );
-        for (contestant, stats) in CONTESTANTS.iter().zip(&stats) {
+        for (contestant, stats) in tuples {
             let avg_time = format!("{:?}", stats.time / stats.rounds.max(1));
+            let avg_margin = stats.margin as f32 / (stats.wins + stats.losses + stats.draws) as f32;
 
             println!(
-                "| {:>40} | {:>6.1} | {:>7} | {:>14} |",
-                contestant.name, stats.elo, stats.matches, avg_time
+                "| {:>48} | {:>6.1} | {:>6.1} | {:>3} | {:>4} | {:>4} | {:>14} |",
+                contestant.name,
+                stats.elo,
+                avg_margin,
+                stats.wins,
+                stats.losses,
+                stats.draws,
+                avg_time
             );
         }
         println!(
-            "+------------------------------------------+--------+---------+----------------+"
+            "+--------------------------------------------------+--------+--------+-----+------+------+----------------+"
         );
     }
 }
 
 fn main() {
-    print!("{}{}", termion::clear::All, termion::cursor::Goto(1, 1));
+    println!("{}{}", termion::clear::All, termion::cursor::Goto(1, 1));
 
     let (tx, rx) = mpsc::channel();
     for _ in 0..8 {

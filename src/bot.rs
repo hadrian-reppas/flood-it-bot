@@ -96,6 +96,15 @@ impl<E: Eval> Player for Negamax<E> {
 }
 
 #[derive(Default, Clone, Copy, Debug)]
+pub struct Captured;
+
+impl Eval for Captured {
+    fn eval(&self, state: &State) -> i32 {
+        state.player1.count() as i32 - state.player2.count() as i32
+    }
+}
+
+#[derive(Default, Clone, Copy, Debug)]
 pub struct Accessible;
 
 impl Eval for Accessible {
@@ -108,43 +117,24 @@ impl Eval for Accessible {
 }
 
 #[derive(Default, Clone, Copy, Debug)]
-pub struct AccessibleCaptured;
+pub struct Closer;
 
-impl Eval for AccessibleCaptured {
-    fn eval(&self, state: &State) -> i32 {
-        let accessible = state.player1.or(state.player2).or(state.walls).not();
-        let player1_accessible = state.player1.bfs(accessible);
-        let player2_accessible = state.player2.bfs(accessible);
-        1000 * (player1_accessible.count() as i32 - player2_accessible.count() as i32)
-            + state.player1.count() as i32
-            - state.player2.count() as i32
-    }
-}
-
-#[derive(Default, Clone, Copy, Debug)]
-pub struct CloserCaptured;
-
-impl Eval for CloserCaptured {
+impl Eval for Closer {
     fn eval(&self, state: &State) -> i32 {
         let accessible = state.player1.or(state.player2).or(state.walls).not();
         let (player1_closer, _, player2_closer) = state.player1.closer(state.player2, accessible);
-        1000 * (player1_closer.count() as i32 - player2_closer.count() as i32)
-            + state.player1.count() as i32
-            - state.player2.count() as i32
+        player1_closer.count() as i32 - player2_closer.count() as i32
     }
 }
 
-#[derive(Default, Clone, Copy, Debug)]
-pub struct AccessibleCloser;
-
-impl Eval for AccessibleCloser {
+impl<A: Eval, B: Eval> Eval for (A, B) {
     fn eval(&self, state: &State) -> i32 {
-        let accessible = state.player1.or(state.player2).or(state.walls).not();
-        let player1_accessible = state.player1.bfs(accessible);
-        let player2_accessible = state.player2.bfs(accessible);
-        let (player1_closer, _, player2_closer) = state.player1.closer(state.player2, accessible);
-        1000 * (player1_accessible.count() as i32 - player2_accessible.count() as i32)
-            + player1_closer.count() as i32
-            - player2_closer.count() as i32
+        256 * self.0.eval(state) + self.1.eval(state)
+    }
+}
+
+impl<A: Eval, B: Eval, C: Eval> Eval for (A, B, C) {
+    fn eval(&self, state: &State) -> i32 {
+        65536 * self.0.eval(state) + 256 * self.1.eval(state) + self.2.eval(state)
     }
 }
