@@ -52,9 +52,9 @@ impl Player for Greedy {
                 let mut state = *state;
                 state.play(*c);
                 if state.player1_next() {
-                    state.player2.count()
+                    state.player2.count_ones()
                 } else {
-                    state.player1.count()
+                    state.player1.count_ones()
                 }
             })
             .unwrap()
@@ -100,7 +100,7 @@ pub struct Captured;
 
 impl Eval for Captured {
     fn eval(&self, state: &State) -> i32 {
-        state.player1.count() as i32 - state.player2.count() as i32
+        state.player1.count_ones() as i32 - state.player2.count_ones() as i32
     }
 }
 
@@ -109,10 +109,10 @@ pub struct Accessible;
 
 impl Eval for Accessible {
     fn eval(&self, state: &State) -> i32 {
-        let accessible = state.player1.or(state.player2).or(state.walls).not();
+        let accessible = !(state.player1 | state.player2 | state.walls);
         let player1_accessible = state.player1.bfs(accessible);
         let player2_accessible = state.player2.bfs(accessible);
-        player1_accessible.count() as i32 - player2_accessible.count() as i32
+        player1_accessible.count_ones() as i32 - player2_accessible.count_ones() as i32
     }
 }
 
@@ -121,9 +121,9 @@ pub struct Closer;
 
 impl Eval for Closer {
     fn eval(&self, state: &State) -> i32 {
-        let accessible = state.player1.or(state.player2).or(state.walls).not();
+        let accessible = !(state.player1 | state.player2 | state.walls);
         let (player1_closer, _, player2_closer) = state.player1.closer(state.player2, accessible);
-        player1_closer.count() as i32 - player2_closer.count() as i32
+        player1_closer.count_ones() as i32 - player2_closer.count_ones() as i32
     }
 }
 

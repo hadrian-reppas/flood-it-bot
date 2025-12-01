@@ -1,26 +1,19 @@
-use core::arch::aarch64::{
-    uint8x16_t, uint16x8_t, vaddlvq_u16, vaddq_u16, vaddvq_u32, vandq_u16, vbicq_u16, vcntq_u8,
-    vcombine_u8, vdotq_u32, vdupq_n_u16, vdupq_n_u32, veorq_u16, vextq_u16, vmaxvq_u16, vminvq_u16,
-    vmovn_u16, vmvnq_u16, vorrq_u16, vpaddlq_u8, vrbitq_u8, vreinterpretq_u8_u16,
-    vreinterpretq_u16_u8, vrev16q_u8, vrev64q_u16, vshlq_n_u16, vshrq_n_u16,
-};
+use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not};
+use core::simd::{ToBytes, prelude::*};
 
 use rand::Rng;
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct Mask {
-    low: uint16x8_t,
-    high: uint16x8_t,
-}
+#[repr(transparent)]
+#[derive(Clone, Copy, PartialEq)]
+pub struct Mask(u16x16);
 
 impl Mask {
     pub const fn empty() -> Self {
-        Self::from_u16([0u16; 16])
+        Self(u16x16::splat(0))
     }
 
     pub const fn full() -> Self {
-        Self::from_u16([u16::MAX; 16])
+        Self(u16x16::splat(u16::MAX))
     }
 
     pub fn one_hot(row: usize, col: usize) -> Self {
@@ -29,143 +22,54 @@ impl Mask {
 
         let mut array = [0u16; 16];
         array[row] = 1 << (15 - col);
-        array.into()
-    }
-
-    pub fn ne(self, rhs: Self) -> bool {
-        self.xor(rhs).any()
-    }
-
-    pub fn eq(self, rhs: Self) -> bool {
-        !self.ne(rhs)
-    }
-
-    pub fn and(self, rhs: Self) -> Self {
-        unsafe {
-            Self {
-                low: vandq_u16(self.low, rhs.low),
-                high: vandq_u16(self.high, rhs.high),
-            }
-        }
-    }
-
-    pub fn and_not(self, rhs: Self) -> Self {
-        unsafe {
-            Self {
-                low: vbicq_u16(self.low, rhs.low),
-                high: vbicq_u16(self.high, rhs.high),
-            }
-        }
-    }
-
-    pub fn or(self, rhs: Self) -> Self {
-        unsafe {
-            Self {
-                low: vorrq_u16(self.low, rhs.low),
-                high: vorrq_u16(self.high, rhs.high),
-            }
-        }
-    }
-
-    pub fn xor(self, rhs: Self) -> Self {
-        unsafe {
-            Self {
-                low: veorq_u16(self.low, rhs.low),
-                high: veorq_u16(self.high, rhs.high),
-            }
-        }
-    }
-
-    pub fn not(self) -> Self {
-        unsafe {
-            Self {
-                low: vmvnq_u16(self.low),
-                high: vmvnq_u16(self.high),
-            }
-        }
+        Self(u16x16::from_array(array))
     }
 
     pub fn shift_left(self) -> Self {
-        unsafe {
-            Self {
-                low: vshlq_n_u16(self.low, 1),
-                high: vshlq_n_u16(self.high, 1),
-            }
-        }
+        Self(self.0 << 1)
     }
 
     pub fn shift_right(self) -> Self {
-        unsafe {
-            Self {
-                low: vshrq_n_u16(self.low, 1),
-                high: vshrq_n_u16(self.high, 1),
-            }
-        }
+        Self(self.0 >> 1)
     }
 
     pub fn shift_up(self) -> Self {
-        unsafe {
-            Self {
-                low: vextq_u16(self.low, self.high, 1),
-                high: vextq_u16(self.high, vdupq_n_u16(0), 1),
-            }
-        }
+        Self(self.0.shift_elements_left::<1>(0))
     }
 
     pub fn shift_down(self) -> Self {
-        unsafe {
-            Self {
-                low: vextq_u16(vdupq_n_u16(0), self.low, 7),
-                high: vextq_u16(self.low, self.high, 7),
-            }
-        }
+        Self(self.0.shift_elements_right::<1>(0))
     }
 
     pub fn neighbors(self) -> Self {
-        self.shift_left()
-            .or(self.shift_right())
-            .or(self.shift_up())
-            .or(self.shift_down())
-            .and_not(self)
+        (self.shift_left() | self.shift_right() | self.shift_up() | self.shift_down()) & !self
     }
 
     pub fn neighbors2(self) -> Self {
-        let neighbors = self
-            .shift_left()
-            .or(self.shift_right())
-            .or(self.shift_up())
-            .or(self.shift_down());
-        neighbors
-            .or(neighbors.shift_left())
-            .or(neighbors.shift_right())
-            .or(neighbors.shift_up())
-            .or(neighbors.shift_down())
-            .and_not(self)
+        let neighbors =
+            self.shift_left() | self.shift_right() | self.shift_up() | self.shift_down();
+        (neighbors
+            | neighbors.shift_left()
+            | neighbors.shift_right()
+            | neighbors.shift_up()
+            | neighbors.shift_down())
+            & !self
     }
 
-    pub fn count(self) -> u32 {
-        unsafe {
-            let pc_low = vcntq_u8(vreinterpretq_u8_u16(self.low));
-            let pc_high = vcntq_u8(vreinterpretq_u8_u16(self.high));
-            let h_low = vpaddlq_u8(pc_low);
-            let h_high = vpaddlq_u8(pc_high);
-            vaddlvq_u16(vaddq_u16(h_low, h_high))
-        }
-    }
-
-    pub fn any(self) -> bool {
-        !self.is_empty()
+    pub fn count_ones(self) -> u32 {
+        self.0.count_ones().reduce_sum() as u32
     }
 
     pub fn is_empty(self) -> bool {
-        unsafe { vmaxvq_u16(vorrq_u16(self.low, self.high)) == 0 }
+        self == Self::empty()
     }
 
     pub fn is_full(self) -> bool {
-        unsafe { vminvq_u16(vandq_u16(self.low, self.high)) == u16::MAX }
+        self == Self::full()
     }
 
-    pub fn score(self, scores: &Scores) -> u32 {
+    pub fn score(self, _scores: &Scores) -> u32 {
+        /*
         unsafe {
             let one = vdupq_n_u16(1);
             let mut total = vdupq_n_u32(0);
@@ -205,44 +109,23 @@ impl Mask {
 
             vaddvq_u32(total) as u32
         }
+        */
+        todo!()
     }
 
     pub fn get(self, row: usize, col: usize) -> bool {
         debug_assert!(row < 16, "row out of bounds");
         debug_assert!(col < 16, "col out of bounds");
 
-        let array: [u16; 16] = self.into();
-        (array[row] >> (15 - col)) & 1 == 1
+        (self.0.as_array()[row] >> (15 - col)) & 1 == 1
     }
 
     pub fn flip_horizontal(self) -> Self {
-        fn fliph(v: uint16x8_t) -> uint16x8_t {
-            unsafe {
-                let v_u8 = vreinterpretq_u8_u16(v);
-                let v_rev_u8 = vrbitq_u8(v_u8);
-                let v_rev_u16 = vrev16q_u8(v_rev_u8);
-                vreinterpretq_u16_u8(v_rev_u16)
-            }
-        }
-
-        Self {
-            low: fliph(self.low),
-            high: fliph(self.high),
-        }
+        Self(self.0.reverse_bits())
     }
 
     pub fn flip_vertical(self) -> Self {
-        fn flipv(v: uint16x8_t) -> uint16x8_t {
-            unsafe {
-                let rev = vrev64q_u16(v);
-                vextq_u16(rev, rev, 4)
-            }
-        }
-
-        Self {
-            low: flipv(self.high),
-            high: flipv(self.low),
-        }
+        Self(self.0.reverse())
     }
 
     pub fn flip(self) -> Self {
@@ -250,7 +133,7 @@ impl Mask {
     }
 
     pub fn sample(self, rng: &mut impl Rng) -> Self {
-        let array = self.into_u64();
+        let array = u64x4::from_ne_bytes(self.0.to_ne_bytes()).to_array();
         let [x0, x1, x2, x3] = array;
 
         let count0 = x0.count_ones();
@@ -270,16 +153,16 @@ impl Mask {
         let i = 2 * usize::from(in_x2_or_x3) + usize::from(in_x1_or_x3);
         let mut out = [0u64; 4];
         out[i] = get_kth_one(array[i], k);
-        Self::from_u64(out)
+        Self(u16x16::from_ne_bytes(u64x4::from_array(out).to_le_bytes()))
     }
 
     pub fn bfs(mut self, accessible: Self) -> Self {
         loop {
-            let captured = self.neighbors().and(accessible);
-            if captured.any() {
-                self = self.or(captured);
-            } else {
+            let captured = self.neighbors() & accessible;
+            if captured.is_empty() {
                 return self;
+            } else {
+                self |= captured;
             }
         }
     }
@@ -287,61 +170,89 @@ impl Mask {
     pub fn closer(mut self, mut other: Self, mut accessible: Self) -> (Self, Self, Self) {
         let mut both = Mask::empty();
         loop {
-            let self_neighbors = self
-                .neighbors()
-                .and(accessible)
-                .and_not(other)
-                .and_not(both);
-            let other_neighbors = other
-                .neighbors()
-                .and(accessible)
-                .and_not(self)
-                .and_not(both);
+            let self_neighbors = self.neighbors() & accessible & !other & !both;
+            let other_neighbors = other.neighbors() & accessible & !self & !both;
 
             if self_neighbors.is_empty() && other_neighbors.is_empty() {
                 return (self, both, other);
             }
 
-            let self_captured = self_neighbors.and_not(other_neighbors);
-            let other_captured = other_neighbors.and_not(self_neighbors);
-            let both_captured = self_captured.and(other_captured);
+            let self_captured = self_neighbors & !other_neighbors;
+            let other_captured = other_neighbors & !self_neighbors;
+            let both_captured = self_captured & other_captured;
 
-            self = self.or(self_captured);
-            other = other.or(other_captured);
-            both = both.or(both_captured);
-            accessible = accessible.and_not(self_neighbors).and_not(other_neighbors);
+            self |= self_captured;
+            other |= other_captured;
+            both |= both_captured;
+            accessible &= !self_neighbors & !other_neighbors;
         }
     }
+}
 
-    pub const fn into_u16(self) -> [u16; 16] {
-        unsafe { core::mem::transmute(self) }
+impl BitAnd for Mask {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        Self(self.0 & rhs.0)
     }
+}
 
-    pub const fn from_u16(a: [u16; 16]) -> Self {
-        unsafe { core::mem::transmute(a) }
+impl BitAndAssign for Mask {
+    fn bitand_assign(&mut self, rhs: Self) {
+        self.0 &= rhs.0
     }
+}
 
-    pub const fn into_u64(self) -> [u64; 4] {
-        unsafe { core::mem::transmute(self) }
+impl BitXor for Mask {
+    type Output = Self;
+
+    fn bitxor(self, rhs: Self) -> Self::Output {
+        Self(self.0 ^ rhs.0)
     }
+}
 
-    pub const fn from_u64(a: [u64; 4]) -> Self {
-        unsafe { core::mem::transmute(a) }
+impl BitXorAssign for Mask {
+    fn bitxor_assign(&mut self, rhs: Self) {
+        self.0 ^= rhs.0;
+    }
+}
+
+impl BitOr for Mask {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+
+impl BitOrAssign for Mask {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.0 |= rhs.0;
+    }
+}
+
+impl Not for Mask {
+    type Output = Self;
+
+    fn not(self) -> Self::Output {
+        Self(!self.0)
     }
 }
 
 impl From<[u16; 16]> for Mask {
-    fn from(a: [u16; 16]) -> Self {
-        unsafe { core::mem::transmute(a) }
+    fn from(array: [u16; 16]) -> Self {
+        Self(u16x16::from_array(array))
     }
 }
 
 impl From<Mask> for [u16; 16] {
-    fn from(m: Mask) -> Self {
-        unsafe { core::mem::transmute(m) }
+    fn from(mask: Mask) -> Self {
+        mask.0.to_array()
     }
 }
 
+pub struct Scores;
+/*
 #[derive(Clone, Copy)]
 #[repr(transparent)]
 pub struct Scores([uint8x16_t; 16]);
@@ -357,6 +268,7 @@ impl Scores {
         unsafe { Self(core::mem::transmute(out)) }
     }
 }
+*/
 
 fn get_kth_one(mask: u64, mut k: u32) -> u64 {
     let mut shift = 0;

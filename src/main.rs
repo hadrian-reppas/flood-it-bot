@@ -1,5 +1,5 @@
-#![feature(stdarch_neon_dotprod)]
 #![warn(clippy::pedantic)]
+#![feature(portable_simd)]
 
 use std::sync::{Mutex, mpsc};
 use std::time::{Duration, Instant};

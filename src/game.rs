@@ -42,15 +42,15 @@ pub const COLOR_NAMES: &[&str] = &[
 fn generate(seed: u64) -> ([Mask; 8], Mask) {
     let mut rng = Pcg64::seed_from_u64(seed);
     let mut colors = [Mask::empty(); 8];
-    let mut used = Mask::one_hot(0, 0).or(Mask::one_hot(15, 15));
+    let mut used = Mask::one_hot(0, 0) | Mask::one_hot(15, 15);
 
     macro_rules! add_color {
         ($mask:expr) => {
             let mask = $mask;
-            if !mask.and(used).any() {
+            if (mask & used).is_empty() {
                 let i = rng.random_range(0..8);
-                colors[i] = colors[i].or(mask);
-                used = used.or(mask);
+                colors[i] |= mask;
+                used |= mask;
             }
         };
     }
@@ -88,13 +88,13 @@ fn generate(seed: u64) -> ([Mask; 8], Mask) {
 
     let wall_count = rng.random_range(32..=64);
 
-    let todo = 256 - used.count() - wall_count;
+    let todo = 256 - used.count_ones() - wall_count;
     for _ in 0..todo {
         let neighbors = used.neighbors();
         add_color!(neighbors.sample(&mut rng));
     }
 
-    (colors, used.not())
+    (colors, !used)
 }
 
 #[derive(Clone, Copy)]
@@ -129,7 +129,7 @@ impl State {
             for c in 0..16 {
                 macro_rules! test {
                     ($mask:expr, $color:ident) => {
-                        if $mask.and(Mask::one_hot(r, c)).any() {
+                        if $mask.get(r, c) {
                             print!("{}  ", Bg($color));
                             continue;
                         }
@@ -166,24 +166,24 @@ impl State {
         macro_rules! check {
             ($mask:expr) => {{
                 #![allow(unused_assignments)]
-                if seen.and($mask).any() {
+                if !(seen & $mask).is_empty() {
                     return false;
                 }
-                seen = seen.or($mask);
+                seen |= $mask;
             }};
         }
 
         check!(self.player1);
         check!(self.player2);
 
-        seen = Mask::one_hot(0, 0).or(Mask::one_hot(15, 15));
+        seen = Mask::one_hot(0, 0) | Mask::one_hot(15, 15);
 
         for color in self.colors {
             check!(color);
         }
         check!(self.walls);
 
-        seen.eq(Mask::full())
+        seen.is_full()
     }
 
     pub fn play(&mut self, color: u8) {
@@ -196,12 +196,12 @@ impl State {
         if self.player1_next() {
             self.player1 = self
                 .player1
-                .bfs(self.colors[color as usize].and_not(self.player2));
+                .bfs(self.colors[color as usize] & !self.player2);
             self.player1_last_move = Some(color);
         } else {
             self.player2 = self
                 .player2
-                .bfs(self.colors[color as usize].and_not(self.player1));
+                .bfs(self.colors[color as usize] & !self.player1);
             self.player2_last_move = Some(color);
         }
 
@@ -210,7 +210,7 @@ impl State {
 
     pub fn checkpoint(&self) -> Checkpoint {
         Checkpoint {
-            players: self.player1.or(self.player2),
+            players: self.player1 | self.player2,
             player1_last_move: self.player1_last_move,
             player2_last_move: self.player2_last_move,
             round: self.round,
@@ -218,8 +218,8 @@ impl State {
     }
 
     pub fn restore(&mut self, checkpoint: Checkpoint) {
-        self.player1 = self.player1.and(checkpoint.players);
-        self.player2 = self.player2.and(checkpoint.players);
+        self.player1 = self.player1 & checkpoint.players;
+        self.player2 = self.player2 & checkpoint.players;
         self.player1_last_move = checkpoint.player1_last_move;
         self.player2_last_move = checkpoint.player2_last_move;
         self.round = checkpoint.round;
@@ -234,25 +234,25 @@ impl State {
             return true;
         }
 
-        let accessible = self.player1.or(self.player2).or(self.walls).not();
+        let accessible = !(self.player1 | self.player2 | self.walls);
         let player1_accessible = self.player1.bfs(accessible);
         let player2_accessible = self.player2.bfs(accessible);
-        player1_accessible.and(player2_accessible).is_empty()
+        (player1_accessible & player2_accessible).is_empty()
     }
 
     pub fn final_margin(&self) -> i32 {
         debug_assert!(self.game_over());
 
-        let accessible = self.player1.or(self.player2).or(self.walls).not();
+        let accessible = !(self.player1 | self.player2| self.walls);
         let player1 = self.player1.bfs(accessible);
         let player2 = self.player2.bfs(accessible);
-        player1.count() as i32 - player2.count() as i32
+        player1.count_ones() as i32 - player2.count_ones() as i32
     }
 
     pub fn finalize(&mut self) {
         debug_assert!(self.game_over());
 
-        let accessible = self.player1.or(self.player2).or(self.walls).not();
+        let accessible = !(self.player1 | self.player2 | self.walls);
         self.player1 = self.player1.bfs(accessible);
         self.player2 = self.player2.bfs(accessible);
     }
