@@ -1,5 +1,5 @@
 use core::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not};
-use core::simd::{ToBytes, prelude::*};
+use core::simd::{self, ToBytes, prelude::*};
 
 use rand::Rng;
 
@@ -21,7 +21,7 @@ impl Mask {
         debug_assert!(col < 16, "col out of bounds");
 
         let mut array = [0u16; 16];
-        array[row] = 1 << (15 - col);
+        array[row] = 1 << col;
         Self(u16x16::from_array(array))
     }
 
@@ -68,56 +68,23 @@ impl Mask {
         self == Self::full()
     }
 
-    pub fn score(self, _scores: &Scores) -> u32 {
-        /*
-        unsafe {
-            let one = vdupq_n_u16(1);
-            let mut total = vdupq_n_u32(0);
-
-            macro_rules! iteration {
-                (0) => {
-                    let low_bits = vandq_u16(self.low, one);
-                    let high_bits = vandq_u16(self.high, one);
-                    let bits = vcombine_u8(vmovn_u16(low_bits), vmovn_u16(high_bits));
-                    total = vdotq_u32(total, bits, scores.0[0]);
-                };
-
-                ($i:expr) => {
-                    let low_bits = vandq_u16(vshrq_n_u16(self.low, $i), one);
-                    let high_bits = vandq_u16(vshrq_n_u16(self.high, $i), one);
-                    let bits = vcombine_u8(vmovn_u16(low_bits), vmovn_u16(high_bits));
-                    total = vdotq_u32(total, bits, scores.0[$i as usize]);
-                };
-            }
-
-            iteration!(0);
-            iteration!(1);
-            iteration!(2);
-            iteration!(3);
-            iteration!(4);
-            iteration!(5);
-            iteration!(6);
-            iteration!(7);
-            iteration!(8);
-            iteration!(9);
-            iteration!(10);
-            iteration!(11);
-            iteration!(12);
-            iteration!(13);
-            iteration!(14);
-            iteration!(15);
-
-            vaddvq_u32(total) as u32
+    pub fn score(self, scores: &[[u8; 16]; 16]) -> u32 {
+        let mut sum = 0;
+        let array = self.0.as_array();
+        for i in 0..16 {
+            let row = u8x16::from_array(scores[i]);
+            let mask = simd::Mask::<i8, 16>::from_bitmask(array[i] as u64);
+            let select = mask.select(row, u8x16::splat(0));
+            sum += select.cast::<u16>().reduce_sum();
         }
-        */
-        todo!()
+        sum as u32
     }
 
     pub fn get(self, row: usize, col: usize) -> bool {
         debug_assert!(row < 16, "row out of bounds");
         debug_assert!(col < 16, "col out of bounds");
 
-        (self.0.as_array()[row] >> (15 - col)) & 1 == 1
+        (self.0.as_array()[row] >> col) & 1 == 1
     }
 
     pub fn flip_horizontal(self) -> Self {
@@ -154,6 +121,12 @@ impl Mask {
         let mut out = [0u64; 4];
         out[i] = get_kth_one(array[i], k);
         Self(u16x16::from_ne_bytes(u64x4::from_array(out).to_le_bytes()))
+    }
+
+    pub fn random(rng: &mut impl Rng) -> Self {
+        let mut array: [u16; 16] = [0; 16];
+        rng.fill(&mut array);
+        array.into()
     }
 
     pub fn bfs(mut self, accessible: Self) -> Self {
@@ -250,25 +223,6 @@ impl From<Mask> for [u16; 16] {
         mask.0.to_array()
     }
 }
-
-pub struct Scores;
-/*
-#[derive(Clone, Copy)]
-#[repr(transparent)]
-pub struct Scores([uint8x16_t; 16]);
-
-impl Scores {
-    pub fn new(array: [[u8; 16]; 16]) -> Self {
-        let mut out = [[0u8; 16]; 16];
-        for i in 0..16 {
-            for j in 0..16 {
-                out[j][i] = array[j][i];
-            }
-        }
-        unsafe { Self(core::mem::transmute(out)) }
-    }
-}
-*/
 
 fn get_kth_one(mask: u64, mut k: u32) -> u64 {
     let mut shift = 0;

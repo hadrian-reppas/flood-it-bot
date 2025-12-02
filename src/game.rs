@@ -243,7 +243,7 @@ impl State {
     pub fn final_margin(&self) -> i32 {
         debug_assert!(self.game_over());
 
-        let accessible = !(self.player1 | self.player2| self.walls);
+        let accessible = !(self.player1 | self.player2 | self.walls);
         let player1 = self.player1.bfs(accessible);
         let player2 = self.player2.bfs(accessible);
         player1.count_ones() as i32 - player2.count_ones() as i32

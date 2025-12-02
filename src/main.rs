@@ -189,8 +189,8 @@ fn runner(tx: mpsc::Sender<MatchResult>) {
             p1,
             p2,
             margin: game1.margin - game2.margin,
-            p1_time: game1.p1_time + game2.p1_time,
-            p2_time: game1.p2_time + game2.p2_time,
+            p1_time: game1.p1_time + game2.p2_time,
+            p2_time: game1.p2_time + game2.p1_time,
             rounds: game1.rounds + game2.rounds,
         })
         .unwrap();
@@ -217,8 +217,9 @@ fn scorekeeper(rx: mpsc::Receiver<MatchResult>) {
             "+--------------------------------------------------+--------+--------+-----+------+------+----------------+"
         );
         for (contestant, stats) in tuples {
-            let avg_time = format!("{:?}", stats.time / stats.rounds.max(1));
-            let avg_margin = stats.margin as f32 / (stats.wins + stats.losses + stats.draws) as f32;
+            let games = stats.wins + stats.losses + stats.draws;
+            let avg_time = format!("{:?}", stats.time / games.max(1));
+            let avg_margin = stats.margin as f32 / games as f32;
 
             println!(
                 "| {:>48} | {:>6.1} | {:>6.1} | {:>3} | {:>4} | {:>4} | {:>14} |",
@@ -241,7 +242,7 @@ fn main() {
     println!("{}{}", termion::clear::All, termion::cursor::Goto(1, 1));
 
     let (tx, rx) = mpsc::channel();
-    for _ in 0..8 {
+    for _ in 0..10 {
         let tx = tx.clone();
         std::thread::spawn(|| runner(tx));
     }
