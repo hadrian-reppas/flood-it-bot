@@ -1,6 +1,6 @@
 use core::cmp::max;
 
-use crate::game::State;
+use crate::game::{Color, State};
 
 const INFINITY: i32 = 1_000_000_000;
 
@@ -20,11 +20,7 @@ pub fn negamax<E: Eval>(
 
     let mut max_value = i32::MIN;
     let checkpoint = state.checkpoint();
-    for color in 0..8 {
-        if Some(color) == state.player1_last_move || Some(color) == state.player2_last_move {
-            continue;
-        }
-
+    for color in state.valid_moves() {
         state.play(color);
         let value = -negamax(state, eval, depth - 1, -beta, -alpha, -sign);
         state.restore(checkpoint);
@@ -39,18 +35,18 @@ pub fn negamax<E: Eval>(
 }
 
 pub trait Player {
-    fn play(&mut self, state: &State) -> u8;
+    fn play(&mut self, state: &State) -> Color;
 }
 
 pub struct Greedy;
 
 impl Player for Greedy {
-    fn play(&mut self, state: &State) -> u8 {
-        (0..8)
-            .filter(|c| Some(*c) != state.player1_last_move && Some(*c) != state.player2_last_move)
-            .max_by_key(|c| {
+    fn play(&mut self, state: &State) -> Color {
+        state
+            .valid_moves()
+            .max_by_key(|color| {
                 let mut state = *state;
-                state.play(*c);
+                state.play(*color);
                 if state.player1_next() {
                     state.player2.count_ones()
                 } else {
@@ -69,29 +65,20 @@ pub trait Eval {
 pub struct Negamax<E>(pub E, pub u32);
 
 impl<E: Eval> Player for Negamax<E> {
-    fn play(&mut self, state: &State) -> u8 {
+    fn play(&mut self, state: &State) -> Color {
         let mut state = *state;
         let checkpoint = state.checkpoint();
         let sign = if state.player1_next() { 1 } else { -1 };
 
-        let mut max_value = i32::MIN;
-        let mut best_move = u8::MAX;
-
-        for color in 0..8 {
-            if Some(color) == state.player1_last_move || Some(color) == state.player2_last_move {
-                continue;
-            }
-
-            state.play(color);
-            let value = -negamax(&mut state, &self.0, self.1, -INFINITY, INFINITY, -sign);
-            state.restore(checkpoint);
-
-            if value > max_value {
-                max_value = value;
-                best_move = color;
-            }
-        }
-        best_move
+        state
+            .valid_moves()
+            .max_by_key(|color| {
+                state.play(*color);
+                let value = -negamax(&mut state, &self.0, self.1, -INFINITY, INFINITY, -sign);
+                state.restore(checkpoint);
+                value
+            })
+            .unwrap()
     }
 }
 

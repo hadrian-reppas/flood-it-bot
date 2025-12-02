@@ -7,6 +7,33 @@ use termion::color::{
 
 use crate::mask::Mask;
 
+pub const ROUND_LIMIT: u32 = 100;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Color {
+    Red,
+    Orange,
+    Yellow,
+    Green,
+    Cyan,
+    Blue,
+    Purple,
+    Pink,
+}
+
+impl Color {
+    pub const LIST: [Color; 8] = [
+        Color::Red,
+        Color::Orange,
+        Color::Yellow,
+        Color::Green,
+        Color::Cyan,
+        Color::Blue,
+        Color::Purple,
+        Color::Pink,
+    ];
+}
+
 const PROTECTED: [(usize, usize); 24] = [
     (0, 1),
     (0, 2),
@@ -32,11 +59,6 @@ const PROTECTED: [(usize, usize); 24] = [
     (15, 12),
     (15, 13),
     (15, 14),
-];
-
-pub const ROUND_LIMIT: u32 = 100;
-pub const COLOR_NAMES: &[&str] = &[
-    "red", "orange", "yellow", "green", "cyan", "blue", "purple", "pink",
 ];
 
 fn generate(seed: u64) -> ([Mask; 8], Mask) {
@@ -103,8 +125,8 @@ pub struct State {
     pub walls: Mask,
     pub player1: Mask,
     pub player2: Mask,
-    pub player1_last_move: Option<u8>,
-    pub player2_last_move: Option<u8>,
+    pub player1_last_move: Option<Color>,
+    pub player2_last_move: Option<Color>,
     pub round: u32,
     pub seed: u64,
 }
@@ -157,6 +179,7 @@ impl State {
     pub fn is_valid(&self) -> bool {
         if (self.round >= 1) != self.player1_last_move.is_some()
             || (self.round >= 2) != self.player2_last_move.is_some()
+            || self.round > ROUND_LIMIT
         {
             return false;
         }
@@ -186,10 +209,9 @@ impl State {
         seen.is_full()
     }
 
-    pub fn play(&mut self, color: u8) {
+    pub fn play(&mut self, color: Color) {
         debug_assert!(self.is_valid());
         debug_assert!(!self.game_over());
-        debug_assert!(color < 8);
         debug_assert!(Some(color) != self.player1_last_move);
         debug_assert!(Some(color) != self.player2_last_move);
 
@@ -256,12 +278,41 @@ impl State {
         self.player1 = self.player1.bfs(accessible);
         self.player2 = self.player2.bfs(accessible);
     }
+
+    pub fn valid_moves(&self) -> ValidMoves {
+        ValidMoves {
+            next_index: 0,
+            player1_last_move: self.player1_last_move,
+            player2_last_move: self.player2_last_move,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
 pub struct Checkpoint {
     pub players: Mask,
-    pub player1_last_move: Option<u8>,
-    pub player2_last_move: Option<u8>,
+    pub player1_last_move: Option<Color>,
+    pub player2_last_move: Option<Color>,
     pub round: u32,
+}
+
+pub struct ValidMoves {
+    next_index: usize,
+    player1_last_move: Option<Color>,
+    player2_last_move: Option<Color>,
+}
+
+impl Iterator for ValidMoves {
+    type Item = Color;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while self.next_index < Color::LIST.len()
+            && (Some(Color::LIST[self.next_index]) == self.player1_last_move
+                || Some(Color::LIST[self.next_index]) == self.player2_last_move)
+        {
+            self.next_index += 1;
+        }
+        self.next_index += 1;
+        Color::LIST.get(self.next_index - 1).copied()
+    }
 }
