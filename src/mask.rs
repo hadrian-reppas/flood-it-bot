@@ -140,23 +140,51 @@ impl Mask {
         }
     }
 
-    pub fn closer(mut self, mut other: Self, mut accessible: Self) -> (Self, Self, Self) {
-        let mut both = Mask::empty();
+    pub fn closer(mut self, mut other: Self, walls: Self) -> (Self, Self) {
+        let mut accessible = !(self | other | walls);
         loop {
-            let self_neighbors = self.neighbors() & accessible & !other & !both;
-            let other_neighbors = other.neighbors() & accessible & !self & !both;
+            let self_neighbors = self.neighbors() & accessible & !other;
+            let other_neighbors = other.neighbors() & accessible & !self;
 
             if self_neighbors.is_empty() && other_neighbors.is_empty() {
-                return (self, both, other);
+                return (self, other);
             }
 
             let self_captured = self_neighbors & !other_neighbors;
             let other_captured = other_neighbors & !self_neighbors;
-            let both_captured = self_captured & other_captured;
 
             self |= self_captured;
             other |= other_captured;
-            both |= both_captured;
+            accessible &= !self_neighbors & !other_neighbors;
+        }
+    }
+
+    pub fn closer_by_color(
+        mut self,
+        mut other: Self,
+        walls: Self,
+        colors: &[Mask; 8],
+    ) -> (Self, Self) {
+        let mut accessible = !(self | other | walls);
+        loop {
+            let mut self_neighbors = Self::empty();
+            let mut other_neighbors = Self::empty();
+            for color in colors {
+                self_neighbors |= self.bfs(*color & accessible);
+                other_neighbors |= other.bfs(*color & accessible);
+            }
+            self_neighbors &= !self;
+            other_neighbors &= !other;
+
+            if self_neighbors.is_empty() && other_neighbors.is_empty() {
+                return (self, other);
+            }
+
+            let self_captured = self_neighbors & !other_neighbors;
+            let other_captured = other_neighbors & !self_neighbors;
+
+            self |= self_captured;
+            other |= other_captured;
             accessible &= !self_neighbors & !other_neighbors;
         }
     }

@@ -108,8 +108,20 @@ pub struct Closer;
 
 impl Eval for Closer {
     fn eval(&self, state: &State) -> i32 {
-        let accessible = !(state.player1 | state.player2 | state.walls);
-        let (player1_closer, _, player2_closer) = state.player1.closer(state.player2, accessible);
+        let (player1_closer, player2_closer) = state.player1.closer(state.player2, state.walls);
+        player1_closer.count_ones() as i32 - player2_closer.count_ones() as i32
+    }
+}
+
+#[derive(Default, Clone, Copy, Debug)]
+pub struct CloserColor;
+
+impl Eval for CloserColor {
+    fn eval(&self, state: &State) -> i32 {
+        let (player1_closer, player2_closer) =
+            state
+                .player1
+                .closer_by_color(state.player2, state.walls, &state.colors);
         player1_closer.count_ones() as i32 - player2_closer.count_ones() as i32
     }
 }
